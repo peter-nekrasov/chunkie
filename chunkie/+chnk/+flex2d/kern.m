@@ -113,6 +113,27 @@ case {'sp', 'sprime'} % normal derivative of flexural wave single layer
    [~,grad] = chnk.flex2d.hkdiffgreen(zk,src,targ);  
    submat = 1/(2*zk^2).*(grad(:,:,1).*nxtarg + grad(:,:,2).*nytarg);
 
+case {'d', 'double'} % normal derivative of flexural wave single layer
+
+   srcnorm = srcinfo.n;
+   nx = repmat((srcnorm(1,:)).',1,ns);
+   ny = repmat((srcnorm(2,:)).',1,ns);
+
+   [~,grad] = chnk.flex2d.hkdiffgreen(zk,src,targ);  
+   submat = -1/(2*zk^2).*(grad(:,:,1).*nx + grad(:,:,2).*ny);
+
+case {'dp', 'dprime'}
+  targnorm = targinfo.n(:,:);
+  srcnorm = srcinfo.n(:,:);
+  [~,~,hess] = chnk.flex2d.hkdiffgreen(zk,src,targ);
+  nxsrc = repmat(srcnorm(1,:),nt,1);
+  nysrc = repmat(srcnorm(2,:),nt,1);
+  nxtarg = repmat((targnorm(1,:)).',1,ns);
+  nytarg = repmat((targnorm(2,:)).',1,ns);
+  submat = -1/(2*zk^2)*(hess(:,:,1).*nxsrc.*nxtarg + hess(:,:,2).*(nysrc.*nxtarg+nxsrc.*nytarg)...
+      + hess(:,:,3).*nysrc.*nytarg);
+
+
 %%% CLAMPED PLATE KERNELS
 
 % boundary conditions applied to a point source
@@ -706,6 +727,133 @@ case {'supported_plate_eval'}
 
     submat(:,1:2:end) = K1;
     submat(:,2:2:end) = K2;
+
+
+%%% GENERALIZED FLEXURAL KERNELS (STOKES, OR FLEX + TENSION)
+% The differential operator is given by:
+%
+%  (a \Delta^2 - b \Delta - c) u = 0 
+%
+% - a,b,c need to be passed as additional arguments
+
+% kernels for the clamped plate integral equation
+case {'clamped_plate_stokes'}
+   srcnorm = srcinfo.n;
+   srctang = srcinfo.d;
+   targnorm = targinfo.n;
+
+   nx = repmat(srcnorm(1,:),nt,1);
+   ny = repmat(srcnorm(2,:),nt,1);
+   
+   nxtarg = repmat((targnorm(1,:)).',1,ns);
+   nytarg = repmat((targnorm(2,:)).',1,ns);
+   
+   a = varargin{1};
+   b = varargin{2};
+   c = varargin{3};
+
+   zk1 = sqrt((- b + sqrt(b^2 + 4*a*c)) / (2*a));
+   zk2 = sqrt((- b - sqrt(b^2 + 4*a*c)) / (2*a));
+
+   [~, ~, hess1, third1, ~] = chnk.flex2d.helmdiffgreen(zk1, src, targ); 
+   [~, ~, ~, ~, fourth1] = chnk.flex2d.helmdiffgreen(zk1, src, targ, true);
+
+   [~, ~, hess2, third2, ~] = chnk.flex2d.helmdiffgreen(zk2, src, targ); 
+   [~, ~, ~, ~, fourth2] = chnk.flex2d.helmdiffgreen(zk2, src, targ, true);
+
+   hess = 1/(zk1-zk2)*(hess1 - hess2);
+   third = 1/(zk1-zk2)*(third1 - third2);
+   fourth = 1/(zk1-zk2)*(fourth1 - fourth2);
+
+   dx = repmat(srctang(1,:),nt,1);
+   dy = repmat(srctang(2,:),nt,1);
+    
+   ds = sqrt(dx.*dx+dy.*dy);
+
+   taux = dx./ds;
+   tauy = dy./ds;
+   
+   rx = targ(1,:).' - src(1,:);
+   ry = targ(2,:).' - src(2,:);
+   r2 = rx.^2 + ry.^2;
+
+   rn = rx.*nx + ry.*ny;
+   rtau = rx.*taux + ry.*tauy;
+   ntargtau = nxtarg.*taux + nytarg.*tauy;
+
+   rntarg = rx.*nxtarg + ry.*nytarg;
+
+   K11 = -((third(:, :, 1).*(nx.*nx.*nx) + third(:, :, 2).*(3*nx.*nx.*ny) +...
+       third(:, :, 3).*(3*nx.*ny.*ny) + third(:, :, 4).*(ny.*ny.*ny))) - ...
+       (3*(third(:, :, 1).*(nx.*taux.*taux) + third(:, :, 2).*(2*nx.*taux.*tauy + ny.*taux.*taux) +...
+       third(:, :, 3).*(nx.*tauy.*tauy + 2*ny.*taux.*tauy) + third(:, :, 4).*(ny.*tauy.*tauy)));  % G_{ny ny ny} + 3G_{ny tauy tauy}
+
+   K12 = -((hess(:, :, 1).*(nx.*nx) + hess(:, :, 2).*(2*nx.*ny) + hess(:, :, 3).*(ny.*ny)))+...
+          ((hess(:, :, 1).*(taux.*taux) + hess(:, :, 2).*(2*taux.*tauy) + hess(:, :, 3).*(tauy.*tauy))); % -G_{ny ny}  + G_{tauy tauy}
+
+   K21 = -((fourth(:, :, 1).*(nx.*nx.*nx.*nxtarg) + fourth(:, :, 2).*(nx.*nx.*nx.*nytarg + 3*nx.*nx.*ny.*nxtarg) + ...
+          fourth(:, :, 3).*(3*nx.*nx.*ny.*nytarg + 3*nx.*ny.*ny.*nxtarg) + fourth(:, :, 4).*(3*nx.*ny.*ny.*nytarg +ny.*ny.*ny.*nxtarg)+...
+          fourth(:, :, 5).*(ny.*ny.*ny.*nytarg)) ) - ...
+          (3.*(fourth(:, :, 1).*(nx.*taux.*taux.*nxtarg)+ fourth(:, :, 2).*(nx.*taux.*taux.*nytarg + 2*nx.*taux.*tauy.*nxtarg + ny.*taux.*taux.*nxtarg) +...
+          fourth(:, :, 3).*(2*nx.*taux.*tauy.*nytarg + ny.*taux.*taux.*nytarg + nx.*tauy.*tauy.*nxtarg + 2*ny.*taux.*tauy.*nxtarg) + ...
+          fourth(:, :, 4).*(nx.*tauy.*tauy.*nytarg +2*ny.*taux.*tauy.*nytarg + ny.*tauy.*tauy.*nxtarg) +...
+          fourth(:, :, 5).*(ny.*tauy.*tauy.*nytarg))) + ...
+          1/pi.*(-3*rn.*rntarg./(r2.^2) + 4.*(rn.^3).*rntarg./(r2.^3) + 3*(rn.*rtau.*ntargtau)./ (r2.^2));
+
+   K22 = -((third(:,:, 1).*(nx.*nx.*nxtarg) +third(:, :, 2).*(nx.*nx.*nytarg + 2*nx.*ny.*nxtarg) + third(:, :, 3).*(2*nx.*ny.*nytarg + ny.*ny.*nxtarg)+...
+         third(:, :,4).*(ny.*ny.*nytarg))) + ...
+         ((third(:,:, 1).*(taux.*taux.*nxtarg) +third(:, :, 2).*(taux.*taux.*nytarg + 2*taux.*tauy.*nxtarg) + third(:, :, 3).*(2*taux.*tauy.*nytarg + tauy.*tauy.*nxtarg)+...
+         third(:, :,4).*(tauy.*tauy.*nytarg)));
+
+  submat = zeros(2*nt,2*ns);
+  
+  submat(1:2:end,1:2:end) = K11;
+  submat(1:2:end,2:2:end) = K12;
+    
+  submat(2:2:end,1:2:end) = K21;
+  submat(2:2:end,2:2:end) = K22;
+
+% clamped plate kernels for plotting
+case {'clamped_plate_stokes_eval'}
+
+    submat = zeros(nt,2*ns);
+
+    srcnorm = srcinfo.n;
+    srctang = srcinfo.d;
+    nx = repmat(srcnorm(1,:),nt,1);
+    ny = repmat(srcnorm(2,:),nt,1);
+    dx = repmat(srctang(1,:),nt,1);
+    dy = repmat(srctang(2,:),nt,1);
+    ds = sqrt(dx.*dx+dy.*dy);
+
+    taux = dx./ds;
+    tauy = dy./ds;
+
+    a = varargin{1};
+    b = varargin{2};
+    c = varargin{3};
+
+    zk1 = sqrt((- b + sqrt(b^2 + 4*a*c)) / (2*a));
+    zk2 = sqrt((- b - sqrt(b^2 + 4*a*c)) / (2*a));
+
+    [~, ~, hess1, third1, ~] = chnk.flex2d.helmdiffgreen(zk1, src, targ); 
+    [~, ~, hess2, third2, ~] = chnk.flex2d.helmdiffgreen(zk2, src, targ); 
+
+    hess = 1/(zk1-zk2)*(hess1 - hess2);
+    third = 1/(zk1-zk2)*(third1 - third2);
+
+    K1 = -((third(:, :, 1).*(nx.*nx.*nx) + third(:, :, 2).*(3*nx.*nx.*ny) +...
+       third(:, :, 3).*(3*nx.*ny.*ny) + third(:, :, 4).*(ny.*ny.*ny)) ) - ...
+       (3.*(third(:, :, 1).*(nx.*taux.*taux) + third(:, :, 2).*(2*nx.*taux.*tauy + ny.*taux.*taux) +...
+       third(:, :, 3).*(nx.*tauy.*tauy + 2*ny.*taux.*tauy) + third(:, :, 4).*(ny.*tauy.*tauy)));  % G_{ny ny ny} + 3G_{ny tauy tauy}
+
+    K2 =  -((hess(:, :, 1).*(nx.*nx) + hess(:, :, 2).*(2*nx.*ny) + hess(:, :, 3).*(ny.*ny)))+...
+          ((hess(:, :, 1).*(taux.*taux) + hess(:, :, 2).*(2*taux.*tauy) + hess(:, :, 3).*(tauy.*tauy))); % -G_{ny ny}  + G_{tauy tauy}
+
+    submat(:,1:2:end) = K1;
+    submat(:,2:2:end) = K2;
+
+
 
 end
 
