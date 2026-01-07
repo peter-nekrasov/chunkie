@@ -30,6 +30,7 @@ function [sysmat,varargout] = chunkermat(chnkobj,kern,opts,ilist)
 %                       is not defined by the kernel object. Supported 
 %                       types are:
 %                         smooth => smooth kernels
+%                         removable => piecewise smooth kernels
 %                         log => logarithmically singular kernels or 
 %                                smooth times log + smooth
 %                         pv => principal value singular kernels + log
@@ -65,6 +66,7 @@ function [sysmat,varargout] = chunkermat(chnkobj,kern,opts,ilist)
 %                      corrections for near corners if input chnkobj is
 %                      of type chunkergraph
 %           opts.rcip_ignore = [], list of vertices to ignore in rcip
+%           opts.rcip_savedepth = (10), depth to save rcip info
 %           opts.nsub_or_tol = (40) specify the level of refinements in rcip
 %                    or a tolerance where the number of levels is given by
 %                    ceiling(log_{2}(1/tol^2));
@@ -83,6 +85,9 @@ function [sysmat,varargout] = chunkermat(chnkobj,kern,opts,ilist)
 % Optional output
 %   opts - with the updated opts structure which stores the relevant
 %          quantities in opts.auxquads.<opts.quad><opts.type>
+%   rcipsav - precomputed structure of rcip data at corners
+%             for subsequent postprocessing of the solution at targets close 
+%             to the corner
 %
 % Examples:
 %   sysmat = chunkermat(chnkr,kern); % standard options
@@ -135,6 +140,7 @@ l2scale = false;
 isrcip = true;
 rcip_ignore = [];
 nsub = 40;
+rcip_savedepth = 10;
 adaptive_correction = false;
 sing = 'log';
 
@@ -161,6 +167,9 @@ end
 
 if(isfield(opts,'rcip'))
     isrcip = opts.rcip;
+end
+if(isfield(opts,'rcip_savedepth'))
+    rcip_savedepth = opts.rcip_savedepth;
 end
 if(isfield(opts,'rcip_ignore'))
     rcip_ignore = opts.rcip_ignore;
@@ -371,6 +380,15 @@ for i=1:nchunkers
                 auxquads = chnk.quadggq.setup(k,type);
                 opts.auxquads.ggqlog = auxquads;
             end
+        elseif strcmpi(sing, 'removable')
+            type = 'removable';
+            if (isfield(opts,'auxquads') && isfield(opts.auxquads,'ggqremovable'))
+                auxquads = opts.auxquads.ggqremovable;
+            else
+                k = chnkr.k;
+                auxquads = chnk.quadggq.setup(k, type);
+                opts.auxquads.ggqremovable = auxquads;
+            end
         elseif strcmpi(singi,'log')
             type = 'log';
             if (isfield(opts,'auxquads') &&isfield(opts.auxquads,'ggqlog'))
@@ -466,6 +484,8 @@ if(icgrph && isrcip)
     npt_all = horzcat(chnkobj.echnks.npt);
     [~,nv] = size(chnkobj.verts);
     ngl = chnkrs(1).k;
+
+    rcipsav = cell(nv,1);
     
     for ivert=setdiff(1:nv,rcip_ignore)
         clist = chnkobj.vstruc{ivert}{1};
@@ -512,11 +532,15 @@ if(icgrph && isrcip)
         optsrcip = opts;
         optsrcip.nonsmoothonly = false;
         optsrcip.corrections = false;
+        optsrcip.rcip_savedepth = rcip_savedepth;
 
-        R = chnk.rcip.Rcompchunk(chnkrs,iedgechunks,kern,ndim, ...
+
+        [R,rcipsav{ivert}] = chnk.rcip.Rcompchunk(chnkrs,iedgechunks,kern,ndim,chnkobj.verts(:,ivert), ...
             Pbc,PWbc,nsub,starL,circL,starS,circS,ilist,starL1,circL1,... 
             sbclmat,sbcrmat,lvmat,rvmat,u,optsrcip);
-       
+
+        rcipsav{ivert}.starind = starind;
+
         sysmat_tmp = inv(R) - eye(2*ngl*nedge*ndim);
         if (~nonsmoothonly)
             
@@ -574,6 +598,11 @@ if(icgrph && isrcip)
             vsysmat = [vsysmat;sysmat_tmp(:)];
         end    
     end
+
+    if nargout > 2
+        varargout{2} = rcipsav;
+    end
+
     
 end
 
